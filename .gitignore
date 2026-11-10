@@ -1,0 +1,17 @@
+# Segredos
+.env
+
+# Dados do n8n (se algum dia mapear para pasta local)
+n8n_data/
+
+# Dados REAIS de candidatos nunca vão para o git (LGPD).
+# Os arquivos de exemplo em data/ são fictícios e podem ser versionados.
+data/*.real.json
+data/real/
+
+# Sistema / editor
+.DS_Store
+Thumbs.db
+*.log
+.vscode/*
+!.vscode/extensions.json

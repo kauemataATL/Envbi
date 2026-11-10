@@ -1,0 +1,250 @@
+{
+  "name": "Bot WhatsApp - Candidatos",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "GET",
+        "path": "whatsapp",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "a0d4ffdd-a745-4a25-8c75-2fb0a1a3fe46",
+      "name": "Webhook verificação (GET)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "ae8f84e7-6c55-4592-b3ba-808e8037ab02"
+    },
+    {
+      "parameters": {
+        "jsCode": "// A Meta chama esta URL com GET uma vez para confirmar que o webhook é seu\nconst q = $input.first().json.query || {};\nconst ok = q['hub.mode'] === 'subscribe' && q['hub.verify_token'] === $env.WA_VERIFY_TOKEN;\nreturn [{ json: { ok, challenge: q['hub.challenge'] || '' } }];"
+      },
+      "id": "f8520502-e902-485f-b018-93b8576de2bf",
+      "name": "Verificar token",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "text",
+        "responseBody": "={{ $json.ok ? $json.challenge : 'forbidden' }}",
+        "options": {
+          "responseCode": "={{ $json.ok ? 200 : 403 }}"
+        }
+      },
+      "id": "3fd84ddf-eefe-4b27-904f-a6023b5d330d",
+      "name": "Responder à Meta",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1.1,
+      "position": [
+        440,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "whatsapp",
+        "options": {}
+      },
+      "id": "7e8949e6-0044-4cca-9a45-f7c043ee80e3",
+      "name": "Mensagem recebida (POST)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        260
+      ],
+      "webhookId": "2cce9ee0-efe3-4d9f-a0f6-723120b40308"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Pega a mensagem recebida. Eventos de status (entregue, lido) não têm \"messages\" e são ignorados.\nconst body = $input.first().json.body || {};\nconst value = body.entry?.[0]?.changes?.[0]?.value;\nconst msg = value?.messages?.[0];\nif (!msg) return [];\n\nconst texto = msg.type === 'text'\n  ? msg.text.body\n  : `[O candidato enviou um(a) ${msg.type}, que o bot ainda não consegue ler. Peça gentilmente para escrever em texto.]`;\n\nreturn [{ json: {\n  from: msg.from,\n  nomePerfil: value.contacts?.[0]?.profile?.name || '',\n  texto,\n} }];"
+      },
+      "id": "a92dd7ce-a3ec-4e7c-94e2-b66238d5f96c",
+      "name": "Extrair mensagem",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Monta o contexto para a IA: prompt + vagas + dados do candidato (por enquanto vindos de data/, depois do InHire)\nconst fs = require('fs');\nconst item = $input.first().json;\n\nconst candidatos = JSON.parse(fs.readFileSync('/files/candidatos.json', 'utf8'));\nconst vagas = fs.readFileSync('/files/vagas.md', 'utf8');\nconst prompt = fs.readFileSync('/files/prompt-bot.md', 'utf8');\n\n// Compara só os 8 últimos dígitos: no Brasil o WhatsApp às vezes manda o número sem o 9 extra\nconst fim8 = (s) => String(s).replace(/\\D/g, '').slice(-8);\nconst candidato = candidatos.find((c) => fim8(c.telefone) === fim8(item.from)) || null;\n\nconst system = [\n  prompt,\n  '# Vagas',\n  vagas,\n  '# Candidato',\n  candidato\n    ? JSON.stringify({ nome: candidato.nome, vaga: candidato.vaga, etapa: candidato.etapa }, null, 2)\n    : `Número não encontrado na base. Nome no perfil do WhatsApp: ${item.nomePerfil || 'desconhecido'}.`,\n].join('\\n\\n');\n\nreturn [{ json: { ...item, candidato, system } }];"
+      },
+      "id": "44cb6c37-acc7-4387-b2f6-10c8959ff871",
+      "name": "Montar contexto",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        440,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.anthropic.com/v1/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "x-api-key",
+              "value": "={{ $env.ANTHROPIC_API_KEY }}"
+            },
+            {
+              "name": "anthropic-version",
+              "value": "2023-06-01"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({\n  model: $env.ANTHROPIC_MODEL || 'claude-haiku-5-5',\n  max_tokens: 500,\n  system: $json.system,\n  messages: [{ role: 'user', content: $json.texto }]\n}) }}",
+        "options": {}
+      },
+      "id": "a44b844f-783a-4647-9ef8-913e34227e69",
+      "name": "Perguntar à IA (Claude)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        660,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Lê a resposta da IA e prepara o(s) envio(s): resposta ao candidato + alerta para a recrutadora se precisar\nconst ctx = $('Montar contexto').first().json;\nlet texto = ($input.first().json.content || [])\n  .filter((b) => b.type === 'text')\n  .map((b) => b.text)\n  .join('\\n')\n  .trim();\n\nconst encaminhar = texto.startsWith('[ENCAMINHAR]');\ntexto = texto.replace('[ENCAMINHAR]', '').trim() || 'Recebi sua mensagem! Já vou verificar e te retorno.';\n\nconst envios = [{ to: ctx.from, type: 'text', text: { body: texto } }];\n\nif (encaminhar && $env.RECRUITER_PHONE) {\n  envios.push({\n    to: $env.RECRUITER_PHONE,\n    type: 'text',\n    text: { body: `⚠️ Candidato pediu atendimento humano\\nNome: ${ctx.candidato?.nome || ctx.nomePerfil}\\nNúmero: ${ctx.from}\\nVaga: ${ctx.candidato?.vaga || '-'}\\nMensagem: ${ctx.texto}` },\n  });\n}\n\nreturn envios.map((e) => ({ json: { messaging_product: 'whatsapp', ...e } }));"
+      },
+      "id": "1e2f62d1-92df-4321-9dbd-88d81da8ceee",
+      "name": "Preparar envios",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        880,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $env.WA_GRAPH_VERSION || 'v23.0' }}/{{ $env.WA_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WA_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {}
+      },
+      "id": "2681ccae-eda1-435c-8330-4a3f67db9002",
+      "name": "Enviar WhatsApp",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1100,
+        260
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook verificação (GET)": {
+      "main": [
+        [
+          {
+            "node": "Verificar token",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verificar token": {
+      "main": [
+        [
+          {
+            "node": "Responder à Meta",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mensagem recebida (POST)": {
+      "main": [
+        [
+          {
+            "node": "Extrair mensagem",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extrair mensagem": {
+      "main": [
+        [
+          {
+            "node": "Montar contexto",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar contexto": {
+      "main": [
+        [
+          {
+            "node": "Perguntar à IA (Claude)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Perguntar à IA (Claude)": {
+      "main": [
+        [
+          {
+            "node": "Preparar envios",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Preparar envios": {
+      "main": [
+        [
+          {
+            "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "active": false,
+  "pinData": {}
+}

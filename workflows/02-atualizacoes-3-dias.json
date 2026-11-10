@@ -1,0 +1,143 @@
+{
+  "name": "Atualizações a cada 3 dias",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "days",
+              "daysInterval": 1,
+              "triggerAtHour": 9
+            }
+          ]
+        }
+      },
+      "id": "93ca6112-250e-4b8c-a803-b3557bf5356c",
+      "name": "Todo dia às 9h",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "33c0ba02-365c-4bec-b9ba-02c3a7b17e82",
+      "name": "Testar agora (manual)",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Escolhe quem deve receber atualização: tem consentimento, processo em andamento\n// e está há UPDATE_INTERVAL_DAYS dias (padrão 3) ou mais sem contato.\nconst fs = require('fs');\nconst cands = JSON.parse(fs.readFileSync('/files/candidatos.json', 'utf8'));\nconst dias = Number($env.UPDATE_INTERVAL_DAYS || 3);\nconst agora = Date.now();\nconst ETAPAS_FINAIS = ['Contratado', 'Reprovado', 'Desistiu'];\nconst template = $env.WA_TEMPLATE_UPDATE || 'hello_world';\n\nconst devidos = cands.filter((c) => {\n  if (!c.consentimento_whatsapp) return false;\n  if (ETAPAS_FINAIS.includes(c.etapa)) return false;\n  if (!c.ultimo_contato) return true;\n  return (agora - new Date(c.ultimo_contato).getTime()) / 86400000 >= dias;\n});\n\nreturn devidos.map((c) => ({ json: {\n  id: c.id,\n  nome: c.nome,\n  payload: {\n    messaging_product: 'whatsapp',\n    to: c.telefone,\n    type: 'template',\n    template: template === 'hello_world'\n      // Template de teste que já vem aprovado no número de teste da Meta\n      ? { name: 'hello_world', language: { code: 'en_US' } }\n      // Seu template aprovado: {{1}} nome, {{2}} vaga, {{3}} etapa\n      : { name: template, language: { code: 'pt_BR' }, components: [{ type: 'body', parameters: [\n          { type: 'text', text: c.nome.split(' ')[0] },\n          { type: 'text', text: c.vaga },\n          { type: 'text', text: c.etapa },\n        ] }] },\n  },\n} }));"
+      },
+      "id": "5464df8a-5703-41c7-968f-593b26fe6f3a",
+      "name": "Selecionar candidatos",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        240,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $env.WA_GRAPH_VERSION || 'v23.0' }}/{{ $env.WA_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WA_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "id": "8de58dce-c9e7-4a74-b024-673c282c7fcb",
+      "name": "Enviar template",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        480,
+        100
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Grava a data do último contato de quem recebeu com sucesso\nconst fs = require('fs');\nconst ARQ = '/files/candidatos.json';\nconst enviados = $('Selecionar candidatos').all();\nconst respostas = $input.all();\n\nconst ok = new Set();\nconst falhas = [];\nrespostas.forEach((r, i) => {\n  if (r.json.messages) ok.add(enviados[i].json.id);\n  else falhas.push({ candidato: enviados[i].json.nome, erro: r.json.error || r.json });\n});\n\nconst cands = JSON.parse(fs.readFileSync(ARQ, 'utf8'));\nconst agora = new Date().toISOString();\ncands.forEach((c) => { if (ok.has(c.id)) c.ultimo_contato = agora; });\nfs.writeFileSync(ARQ, JSON.stringify(cands, null, 2));\n\nreturn [{ json: { enviados: ok.size, falhas } }];"
+      },
+      "id": "4f8c1110-10cc-4ffa-93fa-e2cbf91d827b",
+      "name": "Registrar contato",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        720,
+        100
+      ]
+    }
+  ],
+  "connections": {
+    "Todo dia às 9h": {
+      "main": [
+        [
+          {
+            "node": "Selecionar candidatos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Testar agora (manual)": {
+      "main": [
+        [
+          {
+            "node": "Selecionar candidatos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Selecionar candidatos": {
+      "main": [
+        [
+          {
+            "node": "Enviar template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar template": {
+      "main": [
+        [
+          {
+            "node": "Registrar contato",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "active": false,
+  "pinData": {}
+}
