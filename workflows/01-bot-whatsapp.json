@@ -79,14 +79,37 @@
     },
     {
       "parameters": {
-        "jsCode": "// Monta o contexto para a IA: prompt + vagas + dados do candidato (por enquanto vindos de data/, depois do InHire)\nconst fs = require('fs');\nconst item = $input.first().json;\n\nconst candidatos = JSON.parse(fs.readFileSync('/files/candidatos.json', 'utf8'));\nconst vagas = fs.readFileSync('/files/vagas.md', 'utf8');\nconst prompt = fs.readFileSync('/files/prompt-bot.md', 'utf8');\n\n// Compara só os 8 últimos dígitos: no Brasil o WhatsApp às vezes manda o número sem o 9 extra\nconst fim8 = (s) => String(s).replace(/\\D/g, '').slice(-8);\nconst candidato = candidatos.find((c) => fim8(c.telefone) === fim8(item.from)) || null;\n\nconst system = [\n  prompt,\n  '# Vagas',\n  vagas,\n  '# Candidato',\n  candidato\n    ? JSON.stringify({ nome: candidato.nome, vaga: candidato.vaga, etapa: candidato.etapa }, null, 2)\n    : `Número não encontrado na base. Nome no perfil do WhatsApp: ${item.nomePerfil || 'desconhecido'}.`,\n].join('\\n\\n');\n\nreturn [{ json: { ...item, candidato, system } }];"
+        "url": "={{ $env.INHIRE_BASE_URL }}/applications",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.INHIRE_API_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ddee85b0-69ed-4ea8-ba60-aed71554bd84",
+      "name": "InHire: buscar candidaturas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Monta o contexto para a IA: prompt + vagas + dados do candidato vindos do InHire\nconst fs = require('fs');\n// ===== ADAPTADOR InHire → formato interno =====\n// Único trecho que conhece o formato do InHire. Na integração real, ajuste SÓ esta função\n// (ela é igual nos workflows 01, 02 e 03 — mude nos três).\nfunction deInhire(app) {\n  return {\n    id: app.id,\n    nome: app.talent?.name || '',\n    telefone: app.talent?.phone || '',\n    vaga: app.job?.name || '',\n    etapa: app.stage || '',\n    consentimento_whatsapp: app.customFields?.consentimento_whatsapp === true,\n  };\n}\n// ==============================================\n\nconst item = $('Extrair mensagem').first().json;\nconst candidatos = ($input.first().json.data || []).map(deInhire);\nconst vagas = fs.readFileSync('/files/vagas.md', 'utf8');\nconst prompt = fs.readFileSync('/files/prompt-bot.md', 'utf8');\n\n// Compara só os 8 últimos dígitos: no Brasil o WhatsApp às vezes manda o número sem o 9 extra\nconst fim8 = (s) => String(s).replace(/\\D/g, '').slice(-8);\nconst candidato = candidatos.find((c) => fim8(c.telefone) === fim8(item.from)) || null;\n\nconst system = [\n  prompt,\n  '# Vagas',\n  vagas,\n  '# Candidato',\n  candidato\n    ? JSON.stringify({ nome: candidato.nome, vaga: candidato.vaga, etapa: candidato.etapa }, null, 2)\n    : `Número não encontrado na base. Nome no perfil do WhatsApp: ${item.nomePerfil || 'desconhecido'}.`,\n].join('\\n\\n');\n\nreturn [{ json: { ...item, candidato, system } }];"
       },
       "id": "44cb6c37-acc7-4387-b2f6-10c8959ff871",
       "name": "Montar contexto",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        440,
+        660,
         260
       ]
     },
@@ -117,7 +140,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        660,
+        880,
         260
       ]
     },
@@ -130,7 +153,7 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        880,
+        1100,
         260
       ]
     },
@@ -157,7 +180,7 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        1100,
+        1320,
         260
       ]
     }
@@ -200,7 +223,7 @@
       "main": [
         [
           {
-            "node": "Montar contexto",
+            "node": "InHire: buscar candidaturas",
             "type": "main",
             "index": 0
           }
@@ -234,6 +257,17 @@
         [
           {
             "node": "Enviar WhatsApp",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "InHire: buscar candidaturas": {
+      "main": [
+        [
+          {
+            "node": "Montar contexto",
             "type": "main",
             "index": 0
           }

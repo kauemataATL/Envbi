@@ -1,6 +1,7 @@
-# Ambiente local: n8n + túnel público gratuito (Cloudflare)
+# Ambiente local: n8n + túnel público gratuito (Cloudflare) + InHire simulado
 # Subir:   docker compose up -d
 # Ver URL do túnel:   docker compose logs tunnel   (procure por https://....trycloudflare.com)
+# Painel do InHire simulado: http://localhost:3000
 
 services:
   n8n:
@@ -21,12 +22,32 @@ services:
       - n8n_data:/home/node/.n8n
       - ./data:/files
 
+  # InHire SIMULADO (mock-inhire/server.js): finge ser a API do ATS até termos a integração real.
+  # Dentro do Docker o n8n acessa em http://inhire-mock:3000; no seu navegador, http://localhost:3000
+  inhire-mock:
+    image: node:22-alpine
+    restart: unless-stopped
+    command: node /app/server.js
+    ports:
+      - "3000:3000"
+    environment:
+      - TZ=America/Sao_Paulo
+      - DATA_DIR=/data
+      - INHIRE_API_TOKEN=${INHIRE_API_TOKEN}
+      - INHIRE_WEBHOOK_SECRET=${INHIRE_WEBHOOK_SECRET}
+      # Workflow 03 (precisa estar ativo). Para testar com o workflow aberto no editor, use /webhook-test/inhire
+      - INHIRE_WEBHOOK_URL=${INHIRE_WEBHOOK_URL:-http://n8n:5678/webhook/inhire}
+    volumes:
+      - ./mock-inhire:/app:ro
+      - ./data/inhire-mock:/data
+
   # Túnel gratuito: gera uma URL https pública que aponta para o n8n.
   # A URL muda toda vez que este container reinicia.
   tunnel:
     image: cloudflare/cloudflared:latest
     restart: unless-stopped
-    command: tunnel --no-autoupdate --url http://n8n:5678
+    # --protocol http2: usa TCP 443 (redes corporativas costumam bloquear o QUIC/UDP padrão)
+    command: tunnel --no-autoupdate --protocol http2 --url http://n8n:5678
     depends_on:
       - n8n
 

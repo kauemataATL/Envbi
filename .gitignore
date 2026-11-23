@@ -9,6 +9,10 @@ n8n_data/
 data/*.real.json
 data/real/
 
+# Estado gerado em tempo de execução
+data/contatos.json
+data/inhire-mock/db.json
+
 # Sistema / editor
 .DS_Store
 Thumbs.db

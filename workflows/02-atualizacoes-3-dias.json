@@ -35,14 +35,37 @@
     },
     {
       "parameters": {
-        "jsCode": "// Escolhe quem deve receber atualização: tem consentimento, processo em andamento\n// e está há UPDATE_INTERVAL_DAYS dias (padrão 3) ou mais sem contato.\nconst fs = require('fs');\nconst cands = JSON.parse(fs.readFileSync('/files/candidatos.json', 'utf8'));\nconst dias = Number($env.UPDATE_INTERVAL_DAYS || 3);\nconst agora = Date.now();\nconst ETAPAS_FINAIS = ['Contratado', 'Reprovado', 'Desistiu'];\nconst template = $env.WA_TEMPLATE_UPDATE || 'hello_world';\n\nconst devidos = cands.filter((c) => {\n  if (!c.consentimento_whatsapp) return false;\n  if (ETAPAS_FINAIS.includes(c.etapa)) return false;\n  if (!c.ultimo_contato) return true;\n  return (agora - new Date(c.ultimo_contato).getTime()) / 86400000 >= dias;\n});\n\nreturn devidos.map((c) => ({ json: {\n  id: c.id,\n  nome: c.nome,\n  payload: {\n    messaging_product: 'whatsapp',\n    to: c.telefone,\n    type: 'template',\n    template: template === 'hello_world'\n      // Template de teste que já vem aprovado no número de teste da Meta\n      ? { name: 'hello_world', language: { code: 'en_US' } }\n      // Seu template aprovado: {{1}} nome, {{2}} vaga, {{3}} etapa\n      : { name: template, language: { code: 'pt_BR' }, components: [{ type: 'body', parameters: [\n          { type: 'text', text: c.nome.split(' ')[0] },\n          { type: 'text', text: c.vaga },\n          { type: 'text', text: c.etapa },\n        ] }] },\n  },\n} }));"
+        "url": "={{ $env.INHIRE_BASE_URL }}/applications",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.INHIRE_API_TOKEN }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e58341d4-b001-44cb-8669-d8781825f099",
+      "name": "InHire: buscar candidaturas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        240,
+        100
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Escolhe quem deve receber atualização: tem consentimento, processo em andamento\n// e está há UPDATE_INTERVAL_DAYS dias (padrão 3) ou mais sem contato.\nconst fs = require('fs');\n// ===== ADAPTADOR InHire → formato interno =====\n// Único trecho que conhece o formato do InHire. Na integração real, ajuste SÓ esta função\n// (ela é igual nos workflows 01, 02 e 03 — mude nos três).\nfunction deInhire(app) {\n  return {\n    id: app.id,\n    nome: app.talent?.name || '',\n    telefone: app.talent?.phone || '',\n    vaga: app.job?.name || '',\n    etapa: app.stage || '',\n    consentimento_whatsapp: app.customFields?.consentimento_whatsapp === true,\n  };\n}\n// ==============================================\n\nfunction payloadTemplate(telefone, template, params) {\n  return {\n    messaging_product: 'whatsapp',\n    to: telefone,\n    type: 'template',\n    template: template === 'hello_world'\n      // Template de teste que já vem aprovado no número de teste da Meta\n      ? { name: 'hello_world', language: { code: 'en_US' } }\n      : { name: template, language: { code: 'pt_BR' }, components: [{ type: 'body',\n          parameters: params.map((text) => ({ type: 'text', text })) }] },\n  };\n}\n\nconst cands = ($input.first().json.data || []).map(deInhire);\nconst ARQ_CONTATOS = '/files/contatos.json';\nconst contatos = fs.existsSync(ARQ_CONTATOS) ? JSON.parse(fs.readFileSync(ARQ_CONTATOS, 'utf8')) : {};\nconst dias = Number($env.UPDATE_INTERVAL_DAYS || 3);\nconst agora = Date.now();\nconst ETAPAS_FINAIS = ['Contratado', 'Reprovado', 'Desistiu'];\nconst template = $env.WA_TEMPLATE_UPDATE || 'hello_world';\n\nconst devidos = cands.filter((c) => {\n  if (!c.consentimento_whatsapp) return false;\n  if (ETAPAS_FINAIS.includes(c.etapa)) return false;\n  const ultimo = contatos[c.id];\n  if (!ultimo) return true;\n  return (agora - new Date(ultimo).getTime()) / 86400000 >= dias;\n});\n\n// Template aprovado (atualizacao_processo): {{1}} nome, {{2}} vaga, {{3}} etapa\nreturn devidos.map((c) => ({ json: {\n  id: c.id,\n  nome: c.nome,\n  payload: payloadTemplate(c.telefone, template, [c.nome.split(' ')[0], c.vaga, c.etapa]),\n} }));"
       },
       "id": "5464df8a-5703-41c7-968f-593b26fe6f3a",
       "name": "Selecionar candidatos",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        240,
+        480,
         100
       ]
     },
@@ -69,21 +92,21 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        480,
+        720,
         100
       ],
       "onError": "continueRegularOutput"
     },
     {
       "parameters": {
-        "jsCode": "// Grava a data do último contato de quem recebeu com sucesso\nconst fs = require('fs');\nconst ARQ = '/files/candidatos.json';\nconst enviados = $('Selecionar candidatos').all();\nconst respostas = $input.all();\n\nconst ok = new Set();\nconst falhas = [];\nrespostas.forEach((r, i) => {\n  if (r.json.messages) ok.add(enviados[i].json.id);\n  else falhas.push({ candidato: enviados[i].json.nome, erro: r.json.error || r.json });\n});\n\nconst cands = JSON.parse(fs.readFileSync(ARQ, 'utf8'));\nconst agora = new Date().toISOString();\ncands.forEach((c) => { if (ok.has(c.id)) c.ultimo_contato = agora; });\nfs.writeFileSync(ARQ, JSON.stringify(cands, null, 2));\n\nreturn [{ json: { enviados: ok.size, falhas } }];"
+        "jsCode": "// Grava a data do último contato (dado NOSSO, não do InHire) de quem recebeu com sucesso\nconst fs = require('fs');\nconst ARQ = '/files/contatos.json';\nconst enviados = $('Selecionar candidatos').all();\nconst respostas = $input.all();\n\nconst ok = new Set();\nconst falhas = [];\nrespostas.forEach((r, i) => {\n  if (r.json.messages) ok.add(enviados[i].json.id);\n  else falhas.push({ candidato: enviados[i].json.nome, erro: r.json.error || r.json });\n});\n\nconst contatos = fs.existsSync(ARQ) ? JSON.parse(fs.readFileSync(ARQ, 'utf8')) : {};\nconst agora = new Date().toISOString();\nok.forEach((id) => { contatos[id] = agora; });\nfs.writeFileSync(ARQ, JSON.stringify(contatos, null, 2));\n\nreturn [{ json: { enviados: ok.size, falhas } }];"
       },
       "id": "4f8c1110-10cc-4ffa-93fa-e2cbf91d827b",
       "name": "Registrar contato",
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        720,
+        960,
         100
       ]
     }
@@ -93,7 +116,7 @@
       "main": [
         [
           {
-            "node": "Selecionar candidatos",
+            "node": "InHire: buscar candidaturas",
             "type": "main",
             "index": 0
           }
@@ -104,7 +127,7 @@
       "main": [
         [
           {
-            "node": "Selecionar candidatos",
+            "node": "InHire: buscar candidaturas",
             "type": "main",
             "index": 0
           }
@@ -127,6 +150,17 @@
         [
           {
             "node": "Registrar contato",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "InHire: buscar candidaturas": {
+      "main": [
+        [
+          {
+            "node": "Selecionar candidatos",
             "type": "main",
             "index": 0
           }

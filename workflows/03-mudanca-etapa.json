@@ -1,0 +1,116 @@
+{
+  "name": "Mudança de etapa (InHire)",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "inhire",
+        "options": {}
+      },
+      "id": "25cace70-d390-4ce5-b95e-7ff28f405090",
+      "name": "InHire: etapa mudou (webhook)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "8db4c6be-eb3a-4334-9ffe-94f0da8eea74"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Recebe o aviso do InHire, confere o segredo e decide se o candidato deve ser avisado\n// ===== ADAPTADOR InHire → formato interno =====\n// Único trecho que conhece o formato do InHire. Na integração real, ajuste SÓ esta função\n// (ela é igual nos workflows 01, 02 e 03 — mude nos três).\nfunction deInhire(app) {\n  return {\n    id: app.id,\n    nome: app.talent?.name || '',\n    telefone: app.talent?.phone || '',\n    vaga: app.job?.name || '',\n    etapa: app.stage || '',\n    consentimento_whatsapp: app.customFields?.consentimento_whatsapp === true,\n  };\n}\n// ==============================================\n\nfunction payloadTemplate(telefone, template, params) {\n  return {\n    messaging_product: 'whatsapp',\n    to: telefone,\n    type: 'template',\n    template: template === 'hello_world'\n      // Template de teste que já vem aprovado no número de teste da Meta\n      ? { name: 'hello_world', language: { code: 'en_US' } }\n      : { name: template, language: { code: 'pt_BR' }, components: [{ type: 'body',\n          parameters: params.map((text) => ({ type: 'text', text })) }] },\n  };\n}\n\nconst req = $input.first().json;\nif (!$env.INHIRE_WEBHOOK_SECRET || req.headers?.['x-inhire-secret'] !== $env.INHIRE_WEBHOOK_SECRET) {\n  throw new Error('Webhook do InHire recusado: X-Inhire-Secret ausente ou diferente de INHIRE_WEBHOOK_SECRET');\n}\n\nconst ev = req.body || {};\nif (ev.event !== 'application.stage_changed' || !ev.data?.application) return [];\n\nconst c = deInhire(ev.data.application);\nif (!c.consentimento_whatsapp) return [];\n\n// Proposta, contratação e desistência são tratadas pessoalmente pela recrutadora\nconst SEM_AVISO_AUTOMATICO = ['Proposta', 'Contratado', 'Desistiu'];\nif (SEM_AVISO_AUTOMATICO.includes(c.etapa)) return [];\n\nconst primeiroNome = c.nome.split(' ')[0];\nconst payload = c.etapa === 'Reprovado'\n  // encerramento_processo: {{1}} nome, {{2}} vaga\n  ? payloadTemplate(c.telefone, $env.WA_TEMPLATE_CLOSE || 'hello_world', [primeiroNome, c.vaga])\n  // mudanca_etapa: {{1}} nome, {{2}} vaga, {{3}} etapa\n  : payloadTemplate(c.telefone, $env.WA_TEMPLATE_STAGE || 'hello_world', [primeiroNome, c.vaga, c.etapa]);\n\nreturn [{ json: { id: c.id, nome: c.nome, etapaAnterior: ev.data.previousStage, etapa: c.etapa, payload } }];"
+      },
+      "id": "a4d79f79-1410-41a6-aa03-ce04689d9f23",
+      "name": "Validar evento",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        220,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://graph.facebook.com/{{ $env.WA_GRAPH_VERSION || 'v23.0' }}/{{ $env.WA_PHONE_NUMBER_ID }}/messages",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Authorization",
+              "value": "=Bearer {{ $env.WA_ACCESS_TOKEN }}"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.payload) }}",
+        "options": {}
+      },
+      "id": "a1235828-45c7-4b92-a4d2-f899c943bad7",
+      "name": "Enviar template",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        440,
+        0
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Grava a data do último contato (dado NOSSO, não do InHire) de quem recebeu com sucesso\nconst fs = require('fs');\nconst ARQ = '/files/contatos.json';\nconst enviados = $('Validar evento').all();\nconst respostas = $input.all();\n\nconst ok = new Set();\nconst falhas = [];\nrespostas.forEach((r, i) => {\n  if (r.json.messages) ok.add(enviados[i].json.id);\n  else falhas.push({ candidato: enviados[i].json.nome, erro: r.json.error || r.json });\n});\n\nconst contatos = fs.existsSync(ARQ) ? JSON.parse(fs.readFileSync(ARQ, 'utf8')) : {};\nconst agora = new Date().toISOString();\nok.forEach((id) => { contatos[id] = agora; });\nfs.writeFileSync(ARQ, JSON.stringify(contatos, null, 2));\n\nreturn [{ json: { enviados: ok.size, falhas } }];"
+      },
+      "id": "b3e4d6b1-985f-46a6-9792-53241d792518",
+      "name": "Registrar contato",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        660,
+        0
+      ]
+    }
+  ],
+  "connections": {
+    "InHire: etapa mudou (webhook)": {
+      "main": [
+        [
+          {
+            "node": "Validar evento",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validar evento": {
+      "main": [
+        [
+          {
+            "node": "Enviar template",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Enviar template": {
+      "main": [
+        [
+          {
+            "node": "Registrar contato",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "America/Sao_Paulo"
+  },
+  "active": false,
+  "pinData": {}
+}
